@@ -25,8 +25,8 @@ pip install numpy scipy
 Clone this repository and navigate into its folder:
 
 ```bash
-git clone https://github.com/yourusername/bsm-pricer.git
-cd bsm-pricer
+git clone https://github.com/lierrejh/BSM-pricer-for-European-options.git
+cd BSM-pricer-for-European-options
 ```
 
 ## Usage
@@ -88,7 +88,4 @@ def test_deep_ITM_call():
 
 Feel free to fork, file issues, or submit pull requests.
 
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
 
