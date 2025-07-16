@@ -1,91 +1,105 @@
-# BSM Pricer
+# Option Mispricing Scanner
 
-A simple Python module implementing the Black‑Scholes‑Merton (BSM) pricing model for European options, along with a Newton–Raphson solver to compute implied volatility from market prices.
+A Python script for pricing European options using the Black–Scholes–Merton model, computing implied volatility via Newton–Raphson, and scanning live option chains for mispriced contracts based on absolute and percentage thresholds.
 
 ## Features
 
-- **European Call & Put Pricing**: Calculates fair option prices under the BSM framework.
-- **Implied Volatility**: Uses Newton–Raphson iteration to back out the volatility implied by a given market price.
-- **Easy Integration**: Pure Python with minimal dependencies (`numpy`, `scipy`).
+* **Vanilla BSM Pricer**: `bsm_price` for calls and puts, accounting for dividends.
+* **Implied Vol Solver**: `implied_volatility` backs out market-implied σ from live quotes.
+* **Greeks**: `vega` and on-the-fly `delta` calculation for filtering.
+* **Live Data Integration**: Fetch spot, dividend yield, and option chains via `yfinance`.
+* **Mispricing Scan**: `find_mispricings` loops through calls or puts, applies absolute and relative filters, and returns actionable strikes.
 
 ## Requirements
 
-- Python 3.7+
-- NumPy
-- SciPy
+* Python 3.7+
+* NumPy
+* SciPy
+* yfinance
 
-Install via pip:
+Install dependencies:
 
 ```bash
-pip install numpy scipy
+pip install numpy scipy yfinance
 ```
 
 ## Installation
 
-Clone this repository and navigate into its folder:
+Clone or download this script into your project directory:
 
 ```bash
-git clone https://github.com/lierrejh/BSM-pricer-for-European-options.git
-cd BSM-pricer-for-European-options
+git clone https://github.com/lierrejh/option-mispricer.git
+cd option-mispricer
 ```
 
 ## Usage
 
-Import the module and call the functions:
+1. **Set parameters** in the `__main__` block at the bottom:
 
-```python
-from bsm_pricer import bsm_price, implied_vol
+   * `ticker`: e.g. `"MSFT"`
+   * `expiry`: first entry from `yf.Ticker(ticker).options`
+   * `sigma_forecast`: your forecast vol (e.g. `0.20` for 20%)
+   * `option_type`: `"calls"` or `"puts"`
+   * `abs_thresh`: minimum \$ price gap (default `0.5`)
+   * `pct_thresh`: minimum % gap (default `2`)
 
-# Parameters\ S = 100            # Spot price
-K = 100            # Strike price
-r = 0.01           # Risk-free rate (continuous)
-q = 0.0            # Dividend yield (continuous)
-sigma = 0.2       # Volatility
-T = 1.0            # Time to maturity (years)
+2. **Run the script**:
 
-# Price a call
-call_price = bsm_price(S, K, r, q, sigma, T, option_type="call")
-print(f"Call Price: {call_price:.4f}")
-
-# Solve implied vol from a market price
-target_price = 10.5
-implied_sigma = implied_vol(S, K, r, q, T, target_price, option_type="call")
-print(f"Implied Volatility: {implied_sigma:.4f}")
+```bash
+python option_mispricer.py
 ```
+
+3. **Interpret output**: Each line is a dict with:
+
+   * `strike`: strike price
+   * `market_price`: mid-market premium
+   * `model_price`: BSM price at `sigma_forecast`
+   * `implied_vol`: solved market-implied volatility
+   * `delta`: option delta used for direction/hedge sizing
 
 ## API Reference
 
-### `d1(S, K, r, q, sigma, T)`
+### `d1(S, K, r, q, sigma, t)`
 
-Compute the \(d_1\) term in the BSM formula.
+Compute the BSM intermediate
+$d_1 = \frac{\ln(S/K)+(r-q+0.5\sigma^2)t}{\sigma\sqrt{t}}$.
 
-### `d2(S, K, r, q, sigma, T)`
+### `bsm_price(S, K, r, q, sigma, t, option_type)`
 
-Compute the \(d_2\) term.
+Return BSM price for European calls/puts.  `option_type` can be `"call"`, `"calls"`, `"put"`, or `"puts"`.
 
-### `bsm_price(S, K, r, q, sigma, T, option_type="call")`
+### `vega(S, K, r, q, sigma, t)`
 
-Return Black‑Scholes price for a European call or put.
+Compute Vega (∂Price/∂σ) = $S e^{-q t} φ(d_1) \sqrt{t}$.
 
-### `implied_vol(S, K, r, q, T, market_price, option_type="call", initial_guess=0.2, tol=1e-6, max_iter=100)`
+### `implied_volatility(S, K, r, q, t, market_price, option_type, initial_guess, tol, max_iter)`
 
-Solve for implied volatility given a market price.
+Newton–Raphson solver to back out implied volatility that matches `market_price`.
 
-## Testing
+### `find_mispricings(ticker, expiry, sigma_forecast, option_type, abs_thresh, pct_thresh)`
 
-You can write simple `pytest` tests comparing against known analytic or library values. For example:
+Scan live option chain via `yfinance` and return list of dicts for contracts where:
 
-```python
-import pytest
-from bsm_pricer import bsm_price
-
-def test_deep_ITM_call():
-    price = bsm_price(S=150, K=100, r=0.01, q=0.0, sigma=0.2, T=0.5, option_type="call")
-    assert price > 50
+```
+|market_price - model_price| >= abs_thresh
+and
+|(market_price - model_price)/model_price|*100 >= pct_thresh
 ```
 
-## Contributing
+## Example
 
-Feel free to fork, file issues, or submit pull requests.
-
-
+```python
+if __name__ == "__main__":
+    ticker = "MSFT"
+    expiry = yf.Ticker(ticker).options[0]
+    results = find_mispricings(
+        ticker,
+        expiry,
+        sigma_forecast=0.20,
+        option_type="puts",
+        abs_thresh=0.5,
+        pct_thresh=2
+    )
+    for m in results:
+        print(m)
+```
