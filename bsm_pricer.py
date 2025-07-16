@@ -1,81 +1,90 @@
 import numpy as np
 from scipy.stats import norm
 import yfinance as yf
+from datetime import datetime
 
-# C = SN (d1) - K e ^ (-rt) N (d2)
+def d1(S, K, r, q, sigma, t):
+    num = np.log(S / K) + (r - q + 0.5 * sigma**2) * t
+    den = sigma * np.sqrt(t)
+    return num / den
 
-# d1 = ln(^s)
-# C = Call option price
-# S = Current underlying price
-# K = Strike Price
-# r = Risk-free interest rate
-# t = Time to maturity
-# N = A normal  distribution
-# q = continuous dividend yield (%pa) - In the original Black-Scholes model, which doesn't account for dividends, the equations are the same as above except: There is just S in place of Se^-qt
-# Therefore, if dividend yield is zero, then e-qt = 1 and the models are identical.
+def bsm_price(S, K, r, q, sigma, t, option_type="call"):
+    D1 = d1(S, K, r, q, sigma, t)
+    D2 = D1 - sigma * np.sqrt(t)
+    df_q = np.exp(-q * t)
+    df_r = np.exp(-r * t)
 
+    if option_type.lower() in ("call","calls"):
+        return df_q * S * norm.cdf(D1) - df_r * K * norm.cdf(D2)
+    elif option_type.lower() in ("put","puts"):
+        return df_r * K * norm.cdf(-D2) - df_q * S * norm.cdf(-D1)
+    else:
+        raise ValueError("option_type must be 'call' or 'put'")
 
-def d1(S,K,r,q,sigma, t):
-    return (np.log(S / K) + (r - q + ((sigma**2)/2)) * t) / sigma * np.sqrt(t)
-
-def d2(d1, sigma, t):
-    return d1 - (sigma * np.sqrt(t))
-
-def BSM_price(d1, d2, S, K, r, t, q, option_type):
-    if option_type == 'call':
-        return S * np.exp(-q*t) * norm.cdf(d1) - K * np.exp(-r*t) * norm.cdf(d2)
-    elif option_type == 'put':
-        return K * np.exp(-r*t) * norm.cdf(-d2) - S * np.exp(-q*t) * norm.cdf(-d1)
-
-def get_spot_price():
-    import yfinance as yf
-    # return yf.Ticker(ticker).history(period='1d')['Close'].iloc[-1]
-    return yf.Ticker('MSFT').history(period='1d')['Close'].iloc[-1]
-
-def get_vega(S, K, r, q, sigma, t):
+def vega(S, K, r, q, sigma, t):
     D1 = d1(S, K, r, q, sigma, t)
     return S * np.exp(-q * t) * norm.pdf(D1) * np.sqrt(t)
 
-def implied_volatility(S, K, r, q, t, market_price, option_type, initial_guess=0.2, tol=1e-5, max_iterations=100):
+def implied_volatility(
+    S, K, r, q, t, market_price,
+    option_type="call",
+    initial_guess=0.2,
+    tol=1e-6,
+    max_iter=100
+):
     sigma = initial_guess
-    
-    # Newton-Raphson method to find implied volatility
-
-    for i in range(max_iterations):
-
-        # Model price using current sigma
-
-        d1_val = d1(S, K, r, q, sigma, t)
-        d2_val = d2(d1_val, sigma, t)
-        price = BSM_price(d1_val, d2_val, S, K, r, t, q, option_type)
-        
-        # Analyse how far off the model price is from the market price 
-
-        price_diff = price - market_price
-        
-        if abs(price_diff) < tol:
+    for _ in range(max_iter):
+        price = bsm_price(S, K, r, q, sigma, t, option_type)
+        diff  = price - market_price
+        if abs(diff) < tol:
             return sigma
-        
-       #  Calculate Vega
-        vega = get_vega(S, K, r, q, sigma, t)
-        if vega < 1e-8:
-            raise ValueError("Vega is too small, cannot compute implied volatility.")
-        
-        # Update sigma using Newton-Raphson formula
-        sigma -= price_diff / vega
-    
+        vol = vega(S, K, r, q, sigma, t)
+        if vol < 1e-8:
+            raise RuntimeError("Vega too small")
+        sigma -= diff / vol
+        sigma = max(sigma, tol)
+    raise RuntimeError("IV did not converge")
+
+def find_mispricings(ticker, expiry, sigma_forecast, option_type, abs_thresh=1.0):
+    t = yf.Ticker(ticker)
+    # 1) Spot & dividend
+    hist = t.history(period="1d")
+    S    = hist["Close"].iloc[-1]
+    q    = t.info.get("dividendYield", 0.0) or 0.0
+    r    = 0.04
+    # 2) Time‐to‐expiry
+    T    = (datetime.strptime(expiry, "%Y-%m-%d").date() - datetime.today().date()).days / 365.0
+    # 3) Choose calls or puts
+    chain  = t.option_chain(expiry)
+    contract = chain.calls if option_type.lower().startswith("call") else chain.puts
+
+    results = []
+    for _, row in contract.iterrows():
+        K = row.strike
+        bid, ask = row.bid, row.ask
+        if bid <= 0 or ask <= 0: continue
+
+        C_mkt = (bid + ask) / 2
+        try:
+            sigma_iv = implied_volatility(S, K, r, q, T, C_mkt, option_type)
+        except RuntimeError:
+            continue
+
+        C_mod = bsm_price(S, K, r, q, sigma_forecast, T, option_type)
+        delta = C_mkt - C_mod
+        if abs(delta) >= abs_thresh:
+            results.append({
+                "strike":        K,
+                "market_price":  C_mkt,
+                "model_price":   C_mod,
+                "implied_vol":   sigma_iv,
+                "delta":         delta,
+            })
+    return results
+
 if __name__ == "__main__":
-    # Example parameters
-    S = get_spot_price() 
-    K = 600 
-    r = 0.05
-    q = 0.02
-    t = 1 
-    market_price = 100  
-    option_type = 'call'
-
-    implied_vol = implied_volatility(S, K, r, q, t, market_price, option_type)
-    print(f"Implied Volatility: {implied_vol:.4f}")
-
-    BSM_price_val = BSM_price(d1(S, K, r, q, implied_vol, t), d2(d1(S, K, r, q, implied_vol, t), implied_vol, t), S, K, r, t, q, option_type)
-    print(f"Black-Scholes-Merton Price: {BSM_price_val:.2f}")
+    ticker = "MSFT"
+    expiry = yf.Ticker(ticker).options[0]
+    mis    = find_mispricings(ticker, expiry, sigma_forecast=0.20, option_type="calls")
+    for m in mis:
+        print(m)
