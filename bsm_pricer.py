@@ -45,7 +45,7 @@ def implied_volatility(
         sigma = max(sigma, tol)
     raise RuntimeError("IV did not converge")
 
-def find_mispricings(ticker, expiry, sigma_forecast, option_type, abs_thresh=1.0):
+def find_mispricings(ticker, expiry, sigma_forecast, option_type, abs_thresh=0.5, pct_thresh=2):
     t = yf.Ticker(ticker)
     # 1) Spot & dividend
     hist = t.history(period="1d")
@@ -65,14 +65,22 @@ def find_mispricings(ticker, expiry, sigma_forecast, option_type, abs_thresh=1.0
         if bid <= 0 or ask <= 0: continue
 
         C_mkt = (bid + ask) / 2
+        
         try:
             sigma_iv = implied_volatility(S, K, r, q, T, C_mkt, option_type)
         except RuntimeError:
             continue
 
         C_mod = bsm_price(S, K, r, q, sigma_forecast, T, option_type)
-        delta = C_mkt - C_mod
-        if abs(delta) >= abs_thresh:
+        D1 = d1(S, K, r, q, sigma_iv, T)
+        if option_type.lower().startswith("call"):
+            delta = np.exp(-q*T) * norm.cdf(D1)
+        else:
+            delta = np.exp(-q*T) * (norm.cdf(D1) - 1)
+
+        pct = (C_mkt - C_mod) / C_mod * 100
+
+        if abs(delta) >= abs_thresh and abs(pct) >= pct_thresh:
             results.append({
                 "strike":        K,
                 "market_price":  C_mkt,
@@ -85,6 +93,6 @@ def find_mispricings(ticker, expiry, sigma_forecast, option_type, abs_thresh=1.0
 if __name__ == "__main__":
     ticker = "MSFT"
     expiry = yf.Ticker(ticker).options[0]
-    mis    = find_mispricings(ticker, expiry, sigma_forecast=0.20, option_type="calls")
+    mis    = find_mispricings(ticker, expiry, sigma_forecast=0.20, option_type="puts")
     for m in mis:
         print(m)
